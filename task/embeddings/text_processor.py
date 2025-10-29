@@ -1,5 +1,4 @@
 from enum import StrEnum
-
 import psycopg2
 
 from task.embeddings.embeddings_client import EmbeddingsClient
@@ -28,53 +27,55 @@ class TextProcessor:
             password=self.db_config['password']
         )
 
-    def process_text_file(self, file_name: str, chunk_size: int, overlap: int, should_table_truncated: bool):
-        db_connection = self._get_connection()
-        cursor = db_connection.cursor()
-
-        if should_table_truncated:
-            cursor.execute("TRUNCATE TABLE vectors")
-
-        with open(file_name) as file:
-            text: str = file.read()
-
-        chunks: list[str] = chunk_text(text, chunk_size, overlap)
-        embeddings: dict[int, list[float]] = self.embeddings_client.get_embeddings(chunks)
-
-        for index, chunk in enumerate(chunks):
-            formatted_embeddings = self._to_pgvector(embeddings[index])
-            cursor.execute("INSERT INTO vectors (document_name, text, embedding) VALUES (%s, %s, %s)",
-                           (file_name, chunk, formatted_embeddings))
-        db_connection.commit()
-
     @staticmethod
     def _to_pgvector(embeddings: list[float]) -> str:
         return f"[{', '.join(map(str, embeddings))}]"
 
-    def search(self, search_mode: str, user_request: str, top_k: int, min_score_threshold: float = None,
-               dimensions: int = 384) -> list[str]:
-        db_connection = self._get_connection()
-        cursor = db_connection.cursor()
+    def process_text_file(self, file_name: str, chunk_size: int, overlap: int, should_table_truncated: bool):
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                if should_table_truncated:
+                    cursor.execute("TRUNCATE TABLE vectors")
 
-        user_query_embeddings = self.embeddings_client.get_embeddings([user_request], dimensions)[0]
-        formatted_user_query_embeddings = self._to_pgvector(user_query_embeddings)
+                with open(file_name) as file:
+                    text = file.read()
 
-        if search_mode == SearchMode.EUCLIDIAN_DISTANCE:
-            cursor.execute("""
-                    SELECT text, embedding <-> %s::vector AS distance
-                    FROM vectors
-                    WHERE embedding <-> %s::vector <= %s
-                    ORDER BY distance
-                    LIMIT %s;
-                """, (formatted_user_query_embeddings, formatted_user_query_embeddings, min_score_threshold, top_k))
+                chunks = chunk_text(text, chunk_size, overlap)
+                embeddings_dict = self.embeddings_client.get_embeddings(chunks)
 
-        elif search_mode == SearchMode.COSINE_DISTANCE:
-            cursor.execute("""
-                    SELECT text, embedding <=> %s::vector AS distance
-                    FROM vectors
-                    WHERE embedding <=> %s::vector <= %s
-                    ORDER BY distance
-                    LIMIT %s;
-                """, (formatted_user_query_embeddings, formatted_user_query_embeddings, min_score_threshold, top_k))
-        results = cursor.fetchall()
-        return [result[0] for result in results]
+                for index, chunk in enumerate(chunks):
+                    formatted_embedding = self._to_pgvector(embeddings_dict[index])
+                    cursor.execute(
+                        "INSERT INTO vectors (document_name, text, embedding) VALUES (%s, %s, %s)",
+                        (file_name, chunk, formatted_embedding)
+                    )
+            conn.commit()
+
+    def search(self, search_mode: str, user_request: str,
+               top_k: int, min_score_threshold: float, dimensions: int = 384
+               ) -> list[str]:
+        user_embedding = self.embeddings_client.get_embeddings([user_request], dimensions)[0]
+        formatted_user_embedding = self._to_pgvector(user_embedding)
+
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                if search_mode == SearchMode.EUCLIDIAN_DISTANCE:
+                    cursor.execute("""
+                            SELECT text, embedding <-> %s::vector AS distance
+                            FROM vectors
+                            WHERE embedding <-> %s::vector <= %s
+                            ORDER BY distance
+                            LIMIT %s;
+                        """, (formatted_user_embedding, formatted_user_embedding, min_score_threshold, top_k))
+
+                elif search_mode == SearchMode.COSINE_DISTANCE:
+                    cursor.execute("""
+                            SELECT text, embedding <=> %s::vector AS distance
+                            FROM vectors
+                            WHERE embedding <=> %s::vector <= %s
+                            ORDER BY distance
+                            LIMIT %s;
+                        """, (formatted_user_embedding, formatted_user_embedding, min_score_threshold, top_k))
+
+                results = cursor.fetchall()
+                return [row[0] for row in results]
