@@ -29,17 +29,6 @@ USER_PROMPT = """##RAG CONTEXT:
 ##USER QUESTION: 
 {query}"""
 
-#TODO:
-# - create embeddings client with 'text-embedding-3-small-' model
-# - create chat completion client
-# - create text processor, DB config: {'host': 'localhost','port': 5433,'database': 'vectordb','user': 'postgres','password': 'postgres'}
-# ---
-# Create method that will run console chat with such steps:
-# - get user input from console
-# - retrieve context
-# - perform augmentation
-# - perform generation
-# - it should run in `while` loop (since it is console chat)
 
 def main():
     embeddings_client = EmbeddingsClient("text-embedding-3-small", OPENAI_API_KEY)
@@ -47,7 +36,7 @@ def main():
     text_processor = TextProcessor(embeddings_client,
                                    {'host': 'localhost', 'port': 5433, 'database': 'vectordb', 'user': 'postgres',
                                     'password': 'postgres'})
-    text_processor.process_text_file("embeddings/microwave_manual.txt", 300, 40, False)
+    text_processor.process_text_file("embeddings/microwave_manual.txt", 300, 40, True)
 
     messages = []
     system_message = Message(role=Role.SYSTEM, content=SYSTEM_PROMPT)
@@ -56,17 +45,15 @@ def main():
     while True:
         user_question = input("\n> ").strip()
 
-        context = text_processor.search(user_question)
+        context = text_processor.search(SearchMode.EUCLIDIAN_DISTANCE, user_question, 5, 0.5)
 
         augmented_query = USER_PROMPT.format(context=context, query=user_question)
         user_message = Message(role=Role.USER, content=augmented_query)
         messages.append(user_message)
 
         ai_answer = chat_completion_client.get_completion(messages, print_request=True).content
+        print(ai_answer)
         ai_message = Message(role=Role.USER, content=ai_answer)
         messages.append(ai_message)
 
-
-# TODO:
-#  PAY ATTENTION THAT YOU NEED TO RUN Postgres DB ON THE 5433 WITH PGVECTOR EXTENSION!
-#  RUN docker-compose.yml
+main()

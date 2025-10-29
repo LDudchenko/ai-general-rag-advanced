@@ -1,15 +1,14 @@
 from enum import StrEnum
 
 import psycopg2
-from psycopg2.extras import RealDictCursor
 
 from task.embeddings.embeddings_client import EmbeddingsClient
 from task.utils.text import chunk_text
 
 
 class SearchMode(StrEnum):
-    EUCLIDIAN_DISTANCE = "euclidean"  # Euclidean distance (<->)
-    COSINE_DISTANCE = "cosine"  # Cosine distance (<=>)
+    EUCLIDIAN_DISTANCE = "euclidean"
+    COSINE_DISTANCE = "cosine"
 
 
 class TextProcessor:
@@ -34,7 +33,7 @@ class TextProcessor:
         cursor = db_connection.cursor()
 
         if should_table_truncated:
-            cursor.execute("TRUNCATE TABLE table_name;")
+            cursor.execute("TRUNCATE TABLE vectors")
 
         with open(file_name) as file:
             text: str = file.read()
@@ -46,39 +45,36 @@ class TextProcessor:
             formatted_embeddings = self._to_pgvector(embeddings[index])
             cursor.execute("INSERT INTO vectors (document_name, text, embedding) VALUES (%s, %s, %s)",
                            (file_name, chunk, formatted_embeddings))
+        db_connection.commit()
 
     @staticmethod
     def _to_pgvector(embeddings: list[float]) -> str:
         return f"[{', '.join(map(str, embeddings))}]"
 
-    #TODO:
-    # provide method `process_text_file` that will:
-    #   - apply file name, chunk size, overlap, dimensions and bool of the table should be truncated
-    #   - truncate table with vectors if needed
-    #   - load content from file and generate chunks (in `utils.text` present `chunk_text` that will help do that)
-    #   - generate embeddings from chunks
-    #   - save (insert) embeddings and chunks to DB
-    #       hint 1: embeddings should be saved as string list
-    #       hint 2: embeddings string list should be casted to vector ({embeddings}::vector)
+    def search(self, search_mode: str, user_request: str, top_k: int, min_score_threshold: float = None,
+               dimensions: int = 384) -> list[str]:
+        db_connection = self._get_connection()
+        cursor = db_connection.cursor()
 
+        user_query_embeddings = self.embeddings_client.get_embeddings([user_request], dimensions)[0]
+        formatted_user_query_embeddings = self._to_pgvector(user_query_embeddings)
 
-    #TODO:
-    # provide method `search` that will:
-    #   - apply search mode, user request, top k for search, min score threshold and dimensions
-    #   - generate embeddings from user request
-    #   - search in DB relevant context
-    #     hint 1: to search it in DB you need to create just regular select query
-    #     hint 2: Euclidean distance `<->`, Cosine distance `<=>`
-    #     hint 3: You need to extract `text` from `vectors` table
-    #     hint 4: You need to filter distance in WHERE clause
-    #     hint 5: To get top k use `limit`
+        if search_mode == SearchMode.EUCLIDIAN_DISTANCE:
+            cursor.execute("""
+                    SELECT text, embedding <-> %s::vector AS distance
+                    FROM vectors
+                    WHERE embedding <-> %s::vector <= %s
+                    ORDER BY distance
+                    LIMIT %s;
+                """, (formatted_user_query_embeddings, formatted_user_query_embeddings, min_score_threshold, top_k))
 
-    def search(self, query: str):
-        pass
-
-
-# SELECT text, embedding <->  '[0.23, -0.45, 0.67, ..., 0.12]'::vector AS distance
-# FROM microwave_data
-# WHERE embedding <->  '[0.23, -0.45, 0.67, ..., 0.12]'::vector <= {score}
-# ORDER BY distance
-# LIMIT {top_k};
+        elif search_mode == SearchMode.COSINE_DISTANCE:
+            cursor.execute("""
+                    SELECT text, embedding <=> %s::vector AS distance
+                    FROM vectors
+                    WHERE embedding <=> %s::vector <= %s
+                    ORDER BY distance
+                    LIMIT %s;
+                """, (formatted_user_query_embeddings, formatted_user_query_embeddings, min_score_threshold, top_k))
+        results = cursor.fetchall()
+        return [result[0] for result in results]
