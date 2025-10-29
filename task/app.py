@@ -45,7 +45,7 @@ def main():
     while True:
         user_question = input("\n> ").strip()
 
-        context = text_processor.search(SearchMode.EUCLIDIAN_DISTANCE, user_question, 5, 0.5)
+        context = text_processor.search(SearchMode.EUCLIDIAN_DISTANCE, user_question, 5, 1.5)
 
         augmented_query = USER_PROMPT.format(context=context, query=user_question)
         user_message = Message(role=Role.USER, content=augmented_query)
