@@ -29,6 +29,28 @@ class TextProcessor:
             password=self.db_config['password']
         )
 
+    def process_text_file(self, file_name: str, chunk_size: int, overlap: int, should_table_truncated: bool):
+        db_connection = self._get_connection()
+        cursor = db_connection.cursor()
+
+        if should_table_truncated:
+            cursor.execute("TRUNCATE TABLE table_name;")
+
+        with open(file_name) as file:
+            text: str = file.read()
+
+        chunks: list[str] = chunk_text(text, chunk_size, overlap)
+        embeddings: dict[int, list[float]] = self.embeddings_client.get_embeddings(chunks)
+
+        for index, chunk in enumerate(chunks):
+            formatted_embeddings = self._to_pgvector(embeddings[index])
+            cursor.execute("INSERT INTO vectors (document_name, text, embedding) VALUES (%s, %s, %s)",
+                           (file_name, chunk, formatted_embeddings))
+
+    @staticmethod
+    def _to_pgvector(embeddings: list[float]) -> str:
+        return f"[{', '.join(map(str, embeddings))}]"
+
     #TODO:
     # provide method `process_text_file` that will:
     #   - apply file name, chunk size, overlap, dimensions and bool of the table should be truncated
@@ -50,6 +72,9 @@ class TextProcessor:
     #     hint 3: You need to extract `text` from `vectors` table
     #     hint 4: You need to filter distance in WHERE clause
     #     hint 5: To get top k use `limit`
+
+    def search(self, query: str):
+        pass
 
 
 # SELECT text, embedding <->  '[0.23, -0.45, 0.67, ..., 0.12]'::vector AS distance

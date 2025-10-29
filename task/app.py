@@ -9,19 +9,25 @@ from task.models.role import Role
 
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
-#TODO:
-# Create system prompt with info that it is RAG powered assistant.
-# Explain user message structure (firstly will be provided RAG context and the user question).
-# Provide instructions that LLM should use RAG Context when answer on User Question, will restrict LLM to answer
-# questions that are not related microwave usage, not related to context or out of history scope
-SYSTEM_PROMPT = """
+SYSTEM_PROMPT = """You are a RAG-powered assistant that assists users with their questions about microwave usage.
+
+## Structure of User message:
+`RAG CONTEXT` - Retrieved documents relevant to the query.
+`USER QUESTION` - The user's actual question.
+
+## Instructions:
+- Use information from `RAG CONTEXT` as context when answering the `USER QUESTION`.
+- Cite specific sources when using information from the context.
+- Answer ONLY based on conversation history and RAG context.
+- If no relevant information exists in `RAG CONTEXT` or conversation history, state that you cannot answer the question.
 """
 
-#TODO:
-# Provide structured system prompt, with RAG Context and User Question sections.
-USER_PROMPT = """
-"""
+USER_PROMPT = """##RAG CONTEXT:
+{context}
 
+
+##USER QUESTION: 
+{query}"""
 
 #TODO:
 # - create embeddings client with 'text-embedding-3-small-' model
@@ -35,6 +41,30 @@ USER_PROMPT = """
 # - perform generation
 # - it should run in `while` loop (since it is console chat)
 
+def main():
+    embeddings_client = EmbeddingsClient("text-embedding-3-small", OPENAI_API_KEY)
+    chat_completion_client = ChatCompletionClient("gpt-4o", OPENAI_API_KEY)
+    text_processor = TextProcessor(embeddings_client,
+                                   {'host': 'localhost', 'port': 5433, 'database': 'vectordb', 'user': 'postgres',
+                                    'password': 'postgres'})
+    text_processor.process_text_file("embeddings/microwave_manual.txt", 300, 40, False)
+
+    messages = []
+    system_message = Message(role=Role.SYSTEM, content=SYSTEM_PROMPT)
+    messages.append(system_message)
+
+    while True:
+        user_question = input("\n> ").strip()
+
+        context = text_processor.search(user_question)
+
+        augmented_query = USER_PROMPT.format(context=context, query=user_question)
+        user_message = Message(role=Role.USER, content=augmented_query)
+        messages.append(user_message)
+
+        ai_answer = chat_completion_client.get_completion(messages, print_request=True).content
+        ai_message = Message(role=Role.USER, content=ai_answer)
+        messages.append(ai_message)
 
 
 # TODO:
